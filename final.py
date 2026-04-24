@@ -11,10 +11,11 @@ import torch.nn as nn
 from torch.utils.data import TensorDataset, DataLoader
 from sklearn.preprocessing import LabelEncoder
 from sklearn.model_selection import train_test_split
-from sklearn.metrics import accuracy_score, f1_score, top_k_accuracy_score, roc_auc_score
+from sklearn.metrics import accuracy_score, f1_score, top_k_accuracy_score, roc_auc_score, matthews_corrcoef
 from sklearn.preprocessing import label_binarize
 from imblearn.over_sampling import SMOTE
 import shap
+
 
 # Part 1: Data Loading and Processing
 def loading_features(crispr, lineage, subtype):
@@ -282,26 +283,25 @@ def build_mlp_optimizer(input_dim, num_classes):
 # Part 3: Model Training and Metrics
 def train_mlp(model, optimizer, scheduler, X_train, Y_train_enc,
               epochs=100, batch_size=32, patience=10):
-    """
-    Trains the MLP with early stopping on training loss.
-    Y_train_enc must be integer-encoded (use LabelEncoder before calling).
-    Returns the trained model.
-    """
-    X_t = torch.tensor(X_train.values, dtype=torch.float32) if hasattr(X_train, 'values') \
-          else torch.tensor(X_train, dtype=torch.float32)
+    X_t = torch.tensor(X_train, dtype=torch.float32) if not isinstance(X_train, torch.Tensor) \
+          else X_train
     Y_t = torch.tensor(Y_train_enc, dtype=torch.long)
 
-    dataset = TensorDataset(X_t, Y_t)
-    loader  = DataLoader(dataset, batch_size=batch_size, shuffle=True)
-    criterion = nn.CrossEntropyLoss()  # handles class imbalance better than NLLLoss
+    # split off 15% as validation — done inside here to keep prepare_fn clean
+    val_size = max(1, int(0.15 * len(X_t)))
+    X_val, Y_val = X_t[-val_size:], Y_t[-val_size:]
+    X_tr,  Y_tr  = X_t[:-val_size], Y_t[:-val_size]
 
-    best_loss = float('inf')
-    patience_counter = 0
-    best_state = None
+    loader = DataLoader(TensorDataset(X_tr, Y_tr), batch_size=batch_size, shuffle=True)
+    criterion = nn.CrossEntropyLoss()
+
+    best_loss, patience_counter, best_state = float('inf'), 0, None
+    history = {"train_loss": [], "val_loss": [], "train_acc": [], "val_acc": []}
 
     model.train()
     for epoch in range(epochs):
-        epoch_loss = 0.0
+        # --- training pass ---
+        epoch_loss, correct, total = 0.0, 0, 0
         for X_batch, Y_batch in loader:
             optimizer.zero_grad()
             logits = model(X_batch)
@@ -309,24 +309,40 @@ def train_mlp(model, optimizer, scheduler, X_train, Y_train_enc,
             loss.backward()
             optimizer.step()
             epoch_loss += loss.item()
+            correct += (logits.argmax(1) == Y_batch).sum().item()
+            total   += len(Y_batch)
+        train_loss = epoch_loss / len(loader)
+        train_acc  = correct / total
 
-        avg_loss = epoch_loss / len(loader)
+        # --- validation pass ---
+        model.eval()
+        with torch.no_grad():
+            val_logits = model(X_val)
+            val_loss   = criterion(val_logits, Y_val).item()
+            val_acc    = (val_logits.argmax(1) == Y_val).float().mean().item()
+        model.train()
+
+        history["train_loss"].append(train_loss)
+        history["val_loss"].append(val_loss)
+        history["train_acc"].append(train_acc)
+        history["val_acc"].append(val_acc)
+
         if epoch % 10 == 0:
-            print(f"    Epoch {epoch}/{epochs} — loss: {avg_loss:.4f}")
-        scheduler.step(avg_loss)
+            print(f"    Epoch {epoch}/{epochs} — train loss: {train_loss:.4f}, train acc: {train_acc:.3f}, val loss: {val_loss:.4f}, val acc: {val_acc:.3f}")
 
-        # early stopping: save best weights, stop if no improvement
-        if avg_loss < best_loss:
-            best_loss = avg_loss
-            patience_counter = 0
+        scheduler.step(val_loss)  # now stepping on val loss, more meaningful than train loss
+
+        if val_loss < best_loss:
+            best_loss, patience_counter = val_loss, 0
             best_state = {k: v.clone() for k, v in model.state_dict().items()}
         else:
             patience_counter += 1
             if patience_counter >= patience:
+                print(f"    Early stopping at epoch {epoch}")
                 break
 
-    model.load_state_dict(best_state)  # restore best checkpoint
-    return model
+    model.load_state_dict(best_state)
+    return model, history
 
 def run_models(X_train, X_test, Y_train, Y_test):
     """
@@ -352,15 +368,16 @@ def run_models(X_train, X_test, Y_train, Y_test):
 
     results["Baseline"] = {
         "accuracy":                    accuracy_score(Y_test, base_preds),
-        "f1_weighted":                 f1_score(Y_test, base_preds, average='weighted', zero_division=0),
         "top3_accuracy":               top_k_accuracy_score(Y_test, base_proba, k=3, labels=baseline.classes_),
+        "f1_weighted":                 f1_score(Y_test, base_preds, average='weighted', zero_division=0),
+        "f1_macro":                     f1_score(Y_test, base_preds, average='macro', zero_division=0),
         "roc_auc_one_vs_rest_weighted": roc_auc_score(Y_test_bin, base_proba, multi_class="ovr", average="weighted"),
+        "matthews_corrcoef":           matthews_corrcoef(Y_test, base_preds)
     }
 
     # --- MLP (PyTorch) ---
     mlp, optimizer, scheduler = build_mlp_optimizer(input_dim, num_classes)
-    mlp = train_mlp(mlp, optimizer, scheduler,
-                    X_train.values, Y_train_enc)
+    mlp, _ = train_mlp(mlp, optimizer, scheduler, X_train.values, Y_train_enc)
 
     mlp.eval()
     with torch.no_grad():
@@ -373,9 +390,11 @@ def run_models(X_train, X_test, Y_train, Y_test):
 
     results["MLP"] = {
         "accuracy":                    accuracy_score(Y_test, mlp_preds),
-        "f1_weighted":                 f1_score(Y_test, mlp_preds, average='weighted', zero_division=0),
         "top3_accuracy":               top_k_accuracy_score(Y_test_enc, proba, k=3),
+        "f1_weighted":                 f1_score(Y_test, mlp_preds, average='weighted', zero_division=0),
+        "f1_macro":                     f1_score(Y_test, mlp_preds, average='macro', zero_division=0),
         "roc_auc_one_vs_rest_weighted": roc_auc_score(Y_test_bin_mlp, proba, multi_class="ovr", average="weighted"),
+        "matthews_corrcoef":           matthews_corrcoef(Y_test, mlp_preds)
     }
 
     return pd.DataFrame(results)
@@ -424,6 +443,32 @@ def reshape_experiment(df, experiment_name):
     
     return merged
 
+def plot_training_curves(history, title_suffix, filename):
+    """
+    Input: history dict from train_mlp, a title suffix, and output filename
+    Output: saves a 2-panel plot of loss and accuracy curves
+    """
+    epochs = range(len(history["train_loss"]))
+    fig, axes = plt.subplots(1, 2, figsize=(12, 4))
+
+    axes[0].plot(epochs, history["train_loss"], label="Train Loss")
+    axes[0].plot(epochs, history["val_loss"],   label="Val Loss")
+    axes[0].set_title(f"Loss — {title_suffix}")
+    axes[0].set_xlabel("Epoch")
+    axes[0].set_ylabel("Loss")
+    axes[0].legend()
+
+    axes[1].plot(epochs, history["train_acc"], label="Train Acc")
+    axes[1].plot(epochs, history["val_acc"],   label="Val Acc")
+    axes[1].set_title(f"Accuracy — {title_suffix}")
+    axes[1].set_xlabel("Epoch")
+    axes[1].set_ylabel("Accuracy")
+    axes[1].legend()
+
+    plt.tight_layout()
+    plt.savefig(f"outputs/{filename}")
+    plt.clf()
+
 # Main
 if __name__ == "__main__":
     crispr_df = pd.read_csv("data/crispr_data.csv", index_col=0)
@@ -457,7 +502,7 @@ if __name__ == "__main__":
     ])
     
     metrics = plot_df["metric"].unique()
-    fig, axes = plt.subplots(2, 2, figsize=(14,10))
+    fig, axes = plt.subplots(2, 3, figsize=(20,10))
     axes = axes.flatten()
 
     for i, metric in enumerate(metrics):
@@ -509,7 +554,7 @@ if __name__ == "__main__":
     le_lin = LabelEncoder()
     le_lin.fit(Y_train_lin)
     mlp_lin, opt_lin, sch_lin = build_mlp_optimizer(X_train_lin.shape[1], len(le_lin.classes_))
-    mlp_lin = train_mlp(mlp_lin, opt_lin, sch_lin, X_train_lin.values, le_lin.transform(Y_train_lin))
+    mlp_lin, history_lin = train_mlp(mlp_lin, opt_lin, sch_lin, X_train_lin.values, le_lin.transform(Y_train_lin))
     mlp_lin.eval()
     X_train_lin_t = torch.tensor(X_train_lin.values, dtype=torch.float32)
     X_test_lin_t  = torch.tensor(X_test_lin.values, dtype=torch.float32)
@@ -533,7 +578,7 @@ if __name__ == "__main__":
     le_sub = LabelEncoder()
     le_sub.fit(Y_train_sub)
     mlp_sub, opt_sub, sch_sub = build_mlp_optimizer(X_train_sub.shape[1], len(le_sub.classes_))
-    mlp_sub = train_mlp(mlp_sub, opt_sub, sch_sub, X_train_sub.values, le_sub.transform(Y_train_sub))
+    mlp_sub, history_sub = train_mlp(mlp_sub, opt_sub, sch_sub, X_train_sub.values, le_sub.transform(Y_train_sub))
     mlp_sub.eval()
     X_train_sub_t = torch.tensor(X_train_sub.values, dtype=torch.float32)
     X_test_sub_t  = torch.tensor(X_test_sub.values, dtype=torch.float32)
@@ -550,4 +595,8 @@ if __name__ == "__main__":
     sns.barplot(data=feature_importance_sub, x='importance', y='feature')
     plt.title('Top 20 Feature Importances for Subtype Prediction (SHAP)')
     plt.savefig('outputs/shap_subtype_top20.png')
+    
+    # training curves for lin and sub
+    plot_training_curves(history_lin, "Lineage", "training_curves_lineage.png")
+    plot_training_curves(history_sub, "Subtype", "training_curves_subtype.png")
     

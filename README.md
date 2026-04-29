@@ -1,7 +1,10 @@
 **MPHY 6120 - Final: Predicting Cancer Lineage and Subtype with MLP**
 
 ## Overview
+<<<<<<< HEAD
 - PLEASE NOTE: Running this code was designed around CPU usage and was not tested for GPU. On CPU, it will take 5-10 minutes to run depending on CPU type, so please be patient.
+=======
+>>>>>>> 6e7e2fe85ab58502c706362f36660cc9c533a0db
 - Data loading and processing with imputation and insufficient class size exclusion.
 - EDA: Sample gene correlations, distributions of dependency scores, class imbalance visualizations, correlations between genes and lineages/subtypes
 - Preparation of data splitting with and without SMOTE.

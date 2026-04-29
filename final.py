@@ -508,42 +508,51 @@ if __name__ == "__main__":
     for i, metric in enumerate(metrics):
         subset = plot_df[plot_df["metric"] == metric]
 
+        sns.barplot(
+            data=subset,
+            x="experiment",
+            y="mean",
+            hue="model",
+            ax=axes[i],
+            legend=(i == 0),
+        )
+
+        # Manually overlay error bars using pre-computed std
         models = subset["model"].unique()
         experiments = subset["experiment"].unique()
+        n_models = len(models)
+        n_experiments = len(experiments)
 
-        x_base = np.arange(len(experiments))
-        width = 0.35
+        group_width = 0.8
+        bar_width = group_width / n_models
+        offsets = np.linspace(-group_width / 2 + bar_width / 2, group_width / 2 - bar_width / 2, n_models)
 
         for j, model in enumerate(models):
-            model_data = subset[subset["model"] == model].set_index("experiment")
-
-            # force consistent order
-            model_data = model_data.reindex(experiments)
-
-            means = model_data["mean"].values
-            stds = model_data["std"].values
-
-            x = x_base + j * width
-
-            axes[i].bar(x, means, width=width, label=model)
-
+            model_data = subset[subset["model"] == model].set_index("experiment").reindex(experiments)
+            x_positions = np.arange(n_experiments) + offsets[j]
             axes[i].errorbar(
-                x,
-                means,
-                yerr=stds,
-                fmt='none',
+                x_positions,
+                model_data["mean"].values,
+                yerr=model_data["std"].values,
+                fmt="none",
                 capsize=4,
-                color='black'
+                color="black",
+                linewidth=1.5,
             )
-
-        axes[i].set_xticks(x_base + width / 2)
-        axes[i].set_xticklabels(experiments)
 
         axes[i].set_title(metric.replace("_", " ").title())
         axes[i].set_ylabel("Score")
         axes[i].set_xlabel("")
+        if i != 0:
+            legend = axes[i].get_legend()
+            if legend:
+                legend.remove()
+
     handles, labels = axes[0].get_legend_handles_labels()
-    fig.legend(handles, labels, loc='upper center', ncol=3)
+    fig.legend(handles, labels, loc="upper center", ncol=3)
+    legend = axes[0].get_legend()
+    if legend:
+        legend.remove()
 
     plt.tight_layout(rect=[0, 0, 1, 0.95])
     plt.savefig("outputs/results_with_errorbars.png")

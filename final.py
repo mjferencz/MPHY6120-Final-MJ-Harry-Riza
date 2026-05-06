@@ -250,8 +250,6 @@ def prepare_fn_smote(combined_df, target_col_name):
     return X_train_sub, X_test_sub, Y_train_sub, Y_test_sub
 
 class CancerMLP(nn.Module):
-    # hidden_dims controls number and size of hidden layers
-    # e.g. [512, 256, 128] = three layers shrinking toward output
     def __init__(self, input_dim, num_classes, hidden_dims=[512, 256, 128], dropout=0.4):
         super().__init__()
         layers = []
@@ -259,12 +257,12 @@ class CancerMLP(nn.Module):
         for h in hidden_dims:
             layers += [
                 nn.Linear(prev_dim, h),
-                nn.BatchNorm1d(h),   # stabilizes training on noisy biological data
+                nn.BatchNorm1d(h),
                 nn.ReLU(),
-                nn.Dropout(dropout)  # regularization — dataset is small
+                nn.Dropout(dropout)
             ]
             prev_dim = h
-        layers.append(nn.Linear(prev_dim, num_classes))  # raw logits, no softmax (handled by CrossEntropyLoss)
+        layers.append(nn.Linear(prev_dim, num_classes))
         self.net = nn.Sequential(*layers)
 
     def forward(self, x):
@@ -274,7 +272,6 @@ def build_mlp_optimizer(input_dim, num_classes):
     """Returns a fresh MLP + optimizer + scheduler each run."""
     model = CancerMLP(input_dim, num_classes)
     optimizer = torch.optim.Adam(model.parameters(), lr=1e-3, weight_decay=1e-4)
-    # reduce LR when val loss plateaus — important for noisy data
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
         optimizer, mode='min', patience=5, factor=0.5
     )
@@ -287,7 +284,6 @@ def train_mlp(model, optimizer, scheduler, X_train, Y_train_enc,
           else X_train
     Y_t = torch.tensor(Y_train_enc, dtype=torch.long)
 
-    # split off 15% as validation — done inside here to keep prepare_fn clean
     val_size = max(1, int(0.15 * len(X_t)))
     X_val, Y_val = X_t[-val_size:], Y_t[-val_size:]
     X_tr,  Y_tr  = X_t[:-val_size], Y_t[:-val_size]
@@ -300,7 +296,6 @@ def train_mlp(model, optimizer, scheduler, X_train, Y_train_enc,
 
     model.train()
     for epoch in range(epochs):
-        # --- training pass ---
         epoch_loss, correct, total = 0.0, 0, 0
         for X_batch, Y_batch in loader:
             optimizer.zero_grad()
@@ -314,7 +309,6 @@ def train_mlp(model, optimizer, scheduler, X_train, Y_train_enc,
         train_loss = epoch_loss / len(loader)
         train_acc  = correct / total
 
-        # --- validation pass ---
         model.eval()
         with torch.no_grad():
             val_logits = model(X_val)
@@ -330,8 +324,8 @@ def train_mlp(model, optimizer, scheduler, X_train, Y_train_enc,
         if epoch % 10 == 0:
             print(f"    Epoch {epoch}/{epochs} — train loss: {train_loss:.4f}, train acc: {train_acc:.3f}, val loss: {val_loss:.4f}, val acc: {val_acc:.3f}")
 
-        scheduler.step(val_loss)  # now stepping on val loss, more meaningful than train loss
-
+        scheduler.step(val_loss)
+        
         if val_loss < best_loss:
             best_loss, patience_counter = val_loss, 0
             best_state = {k: v.clone() for k, v in model.state_dict().items()}
@@ -349,7 +343,6 @@ def run_models(X_train, X_test, Y_train, Y_test):
     Runs most-frequent baseline (sklearn) and MLP (PyTorch).
     Returns a DataFrame of metrics matching the shape expected by run_experiment_n_times.
     """
-    # encode string labels to integers for PyTorch
     le = LabelEncoder()
     le.fit(Y_train)
     Y_train_enc = le.transform(Y_train)
@@ -359,7 +352,6 @@ def run_models(X_train, X_test, Y_train, Y_test):
 
     results = {}
 
-    # --- Baseline (sklearn, most_frequent) ---
     baseline = DummyClassifier(strategy="most_frequent")
     baseline.fit(X_train, Y_train)
     base_preds = baseline.predict(X_test)
@@ -375,7 +367,6 @@ def run_models(X_train, X_test, Y_train, Y_test):
         "matthews_corrcoef":           matthews_corrcoef(Y_test, base_preds)
     }
 
-    # --- MLP (PyTorch) ---
     mlp, optimizer, scheduler = build_mlp_optimizer(input_dim, num_classes)
     mlp, _ = train_mlp(mlp, optimizer, scheduler, X_train.values, Y_train_enc)
 
@@ -517,7 +508,6 @@ if __name__ == "__main__":
             legend=(i == 0),
         )
 
-        # Manually overlay error bars using pre-computed std
         models = subset["model"].unique()
         experiments = subset["experiment"].unique()
         n_models = len(models)

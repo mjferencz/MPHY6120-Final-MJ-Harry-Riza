@@ -2,6 +2,7 @@
 
 ## Overview
 - PLEASE NOTE: Running this code was designed around CPU usage and was not tested for GPU. On CPU, it will take 5-10 minutes to run depending on CPU type, so please be patient.
+- The purpose and use of this model is explained in detail in Final_Project_Field_Guide_V2.pdf. For a brief overview, make sure packages listed in requirements.txt and README.md are downloaded and up to date. Make sure files in data/ are properly downloaded (especially data/crispr_data.csv as it is the largest and prone to duplication error). This code will return a trained model to evaluate lineage and subtype simply by runnning. To use further, you can modify to output the model and add a new file into data/ containing a single patient's CRISPR Dependency Scores. Call for an explicit report of most probable lineages and subtypes based on these scores which should also contain model confidence. Take into account these relative confidence factors before preceding with any decisions. See the aforementioned field guide for clinical implementation steps.
 - Data loading and processing with imputation and insufficient class size exclusion.
 - EDA: Sample gene correlations, distributions of dependency scores, class imbalance visualizations, correlations between genes and lineages/subtypes
 - Preparation of data splitting with and without SMOTE.

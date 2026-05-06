@@ -1,0 +1,4 @@
+Core data requirements: numpy, pandas, matplotlib, seaborn - Needed for initial data processing and EDA
+Other data requirements: imblearn - Includes SMOTE which is needed for data augmentation methods for subtype
+Model generation and preparation: sklearn, torch - Needed to make the Dummy Baseline and the MLP
+Model metrics: numpy, pandas, matplotlib, seaborn, shap - Needed to evaluate and plot results from the model running and to show most important features.
